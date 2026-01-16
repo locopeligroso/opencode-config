@@ -1,0 +1,256 @@
+--- /Users/dev10/.bun/install/cache/opencode-antigravity-auth@1.2.8@@@1/dist/src/plugin/transform/gemini.js	2026-01-15 10:33:01
++++ /Users/dev10/.cache/opencode/node_modules/opencode-antigravity-auth/dist/src/plugin/transform/gemini.js	2026-01-16 17:20:37
+@@ -4,8 +4,89 @@
+  * Handles Gemini model-specific request transformations including:
+  * - Thinking config (camelCase keys, thinkingLevel for Gemini 3)
+  * - Tool normalization (function/custom format)
++ * - Schema transformation (JSON Schema -> Gemini Schema format)
+  */
+ /**
++ * Transform a JSON Schema to Gemini-compatible format.
++ * Based on @google/genai SDK's processJsonSchema() function.
++ *
++ * Key transformations:
++ * - Converts type values to uppercase (object -> OBJECT)
++ * - Removes unsupported fields like additionalProperties, $schema
++ * - Recursively processes nested schemas (properties, items, anyOf, etc.)
++ *
++ * @param schema - A JSON Schema object or primitive value
++ * @returns Gemini-compatible schema
++ */
++export function toGeminiSchema(schema) {
++    // Return primitives and arrays as-is
++    if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
++        return schema;
++    }
++    const inputSchema = schema;
++    const result = {};
++    // First pass: collect all property names for required validation
++    const propertyNames = new Set();
++    if (inputSchema.properties && typeof inputSchema.properties === "object") {
++        for (const propName of Object.keys(inputSchema.properties)) {
++            propertyNames.add(propName);
++        }
++    }
++    for (const [key, value] of Object.entries(inputSchema)) {
++        // Skip unsupported fields that Gemini API rejects
++        if (key === "additionalProperties" || key === "$schema" || key === "$id" || key === "$comment") {
++            continue;
++        }
++        if (key === "type" && typeof value === "string") {
++            // Convert type to uppercase for Gemini API
++            result[key] = value.toUpperCase();
++        }
++        else if (key === "properties" && typeof value === "object" && value !== null) {
++            // Recursively transform nested property schemas
++            const props = {};
++            for (const [propName, propSchema] of Object.entries(value)) {
++                props[propName] = toGeminiSchema(propSchema);
++            }
++            result[key] = props;
++        }
++        else if (key === "items" && typeof value === "object") {
++            // Transform array items schema
++            result[key] = toGeminiSchema(value);
++        }
++        else if ((key === "anyOf" || key === "oneOf" || key === "allOf") && Array.isArray(value)) {
++            // Transform union type schemas
++            result[key] = value.map((item) => toGeminiSchema(item));
++        }
++        else if (key === "enum" && Array.isArray(value)) {
++            // Keep enum values as-is
++            result[key] = value;
++        }
++        else if (key === "default" || key === "examples") {
++            // Keep default and examples as-is
++            result[key] = value;
++        }
++        else if (key === "required" && Array.isArray(value)) {
++            // Filter required array to only include properties that exist
++            // This fixes: "parameters.required[X]: property is not defined"
++            if (propertyNames.size > 0) {
++                const validRequired = value.filter((prop) => typeof prop === "string" && propertyNames.has(prop));
++                if (validRequired.length > 0) {
++                    result[key] = validRequired;
++                }
++                // If no valid required properties, omit the required field entirely
++            }
++            else {
++                // If there are no properties, keep required as-is (might be a schema without properties)
++                result[key] = value;
++            }
++        }
++        else {
++            result[key] = value;
++        }
++    }
++    return result;
++}
++/**
+  * Check if a model is a Gemini model (not Claude).
+  */
+ export function isGeminiModel(model) {
+@@ -25,6 +106,15 @@
+     return model.toLowerCase().includes("gemini-2.5");
+ }
+ /**
++ * Check if a model is an image generation model.
++ * Image models don't support thinking and require imageConfig.
++ */
++export function isImageGenerationModel(model) {
++    const lower = model.toLowerCase();
++    return (lower.includes("image") ||
++        lower.includes("imagen"));
++}
++/**
+  * Build Gemini 3 thinking config with thinkingLevel string.
+  */
+ export function buildGemini3ThinkingConfig(includeThoughts, thinkingLevel) {
+@@ -43,6 +133,30 @@
+     };
+ }
+ /**
++ * Valid aspect ratios for image generation.
++ */
++const VALID_ASPECT_RATIOS = ["1:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9"];
++/**
++ * Build image generation config for Gemini image models.
++ *
++ * Configuration is read from environment variables:
++ * - OPENCODE_IMAGE_ASPECT_RATIO: Aspect ratio (e.g., "16:9", "4:3")
++ *
++ * Defaults to 1:1 aspect ratio if not specified.
++ *
++ * Note: Resolution setting is not currently supported by the Antigravity API.
++ */
++export function buildImageGenerationConfig() {
++    // Read aspect ratio from environment or default to 1:1
++    const aspectRatio = process.env.OPENCODE_IMAGE_ASPECT_RATIO || "1:1";
++    if (VALID_ASPECT_RATIOS.includes(aspectRatio)) {
++        return { aspectRatio };
++    }
++    console.warn(`[gemini] Invalid aspect ratio "${aspectRatio}". Using default "1:1". Valid values: ${VALID_ASPECT_RATIOS.join(", ")}`);
++    // Default to 1:1 square aspect ratio
++    return { aspectRatio: "1:1" };
++}
++/**
+  * Normalize tools for Gemini models.
+  * Ensures tools have proper function-style format.
+  *
+@@ -56,6 +170,10 @@
+     }
+     payload.tools = payload.tools.map((tool, toolIndex) => {
+         const t = tool;
++        // Skip normalization for Google Search Retrieval tool
++        if (t.googleSearchRetrieval) {
++            return t;
++        }
+         const newTool = { ...t };
+         const schemaCandidates = [
+             newTool.function?.input_schema,
+@@ -68,15 +186,14 @@
+             newTool.inputSchema,
+         ].filter(Boolean);
+         const placeholderSchema = {
+-            type: "object",
++            type: "OBJECT",
+             properties: {
+                 _placeholder: {
+-                    type: "boolean",
++                    type: "BOOLEAN",
+                     description: "Placeholder. Always pass true.",
+                 },
+             },
+             required: ["_placeholder"],
+-            additionalProperties: false,
+         };
+         let schema = schemaCandidates[0];
+         const schemaObjectOk = schema && typeof schema === "object" && !Array.isArray(schema);
+@@ -84,16 +201,20 @@
+             schema = placeholderSchema;
+             toolDebugMissing += 1;
+         }
++        else {
++            // Transform existing schema to Gemini-compatible format
++            schema = toGeminiSchema(schema);
++        }
+         const nameCandidate = newTool.name ||
+             newTool.function?.name ||
+             newTool.custom?.name ||
+             `tool-${toolIndex}`;
+-        // Ensure function has input_schema
+-        if (newTool.function && !newTool.function.input_schema && schema) {
++        // Always update function.input_schema with transformed schema
++        if (newTool.function && schema) {
+             newTool.function.input_schema = schema;
+         }
+-        // Ensure custom has input_schema
+-        if (newTool.custom && !newTool.custom.input_schema && schema) {
++        // Always update custom.input_schema with transformed schema
++        if (newTool.custom && schema) {
+             newTool.custom.input_schema = schema;
+         }
+         // Create custom from function if missing
+@@ -116,12 +237,10 @@
+                 newTool.parameters = schema;
+             }
+         }
+-        // Ensure custom has input_schema
+         if (newTool.custom && !newTool.custom.input_schema) {
+             newTool.custom.input_schema = {
+-                type: "object",
++                type: "OBJECT",
+                 properties: {},
+-                additionalProperties: false
+             };
+             toolDebugMissing += 1;
+         }
+@@ -130,6 +249,12 @@
+         if (newTool.custom) {
+             delete newTool.custom;
+         }
++        // Strip root-level parameters field - Gemini API doesn't support it
++        // Only function.input_schema is valid for Gemini
++        delete newTool.parameters;
++        delete newTool.input_schema;
++        delete newTool.inputSchema;
++        delete newTool.parametersJsonSchema;
+         return newTool;
+     });
+     return { toolDebugMissing, toolDebugSummaries };
+@@ -138,7 +263,7 @@
+  * Apply all Gemini-specific transformations.
+  */
+ export function applyGeminiTransforms(payload, options) {
+-    const { model, tierThinkingBudget, tierThinkingLevel, normalizedThinking } = options;
++    const { model, tierThinkingBudget, tierThinkingLevel, normalizedThinking, googleSearch } = options;
+     // 1. Apply thinking config if needed
+     if (normalizedThinking) {
+         let thinkingConfig;
+@@ -155,7 +280,24 @@
+         generationConfig.thinkingConfig = thinkingConfig;
+         payload.generationConfig = generationConfig;
+     }
+-    // 2. Normalize tools
++    // 2. Apply Google Search (Grounding) if enabled
++    if (googleSearch && googleSearch.mode === 'auto') {
++        const tools = payload.tools || [];
++        if (!payload.tools) {
++            payload.tools = tools;
++        }
++        // Add Google Search tool
++        // We cast to any[] to avoid TypeScript issues with the loose RequestPayload type
++        payload.tools.push({
++            googleSearchRetrieval: {
++                dynamicRetrievalConfig: {
++                    mode: "MODE_DYNAMIC",
++                    dynamicThreshold: googleSearch.threshold ?? 0.3,
++                },
++            },
++        });
++    }
++    // 3. Normalize tools
+     return normalizeGeminiTools(payload);
+ }
+ //# sourceMappingURL=gemini.js.map
+\ No newline at end of file

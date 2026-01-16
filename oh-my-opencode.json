@@ -1,0 +1,41 @@
+{
+  "$schema": "https://raw.githubusercontent.com/code-yeongyu/oh-my-opencode/master/assets/oh-my-opencode.schema.json",
+  "google_auth": false,
+  "agents": {
+    "Sisyphus": {
+      "model": "google/antigravity-claude-sonnet-4-5-thinking-medium",
+      "temperature": 0.3,
+      "description": "Main orchestrator - uses Sonnet 4.5 for balanced performance"
+    },
+    "librarian": {
+      "model": "google/antigravity-claude-sonnet-4-5-thinking-medium",
+      "temperature": 0.2,
+      "description": "Task execution - uses Sonnet 4.5 for coding tasks"
+    },
+    "explore": {
+      "model": "google/antigravity-gemini-3-flash",
+      "temperature": 0.5,
+      "description": "Fast exploration - uses Gemini Flash for speed"
+    },
+    "oracle": {
+      "model": "google/antigravity-claude-sonnet-4-5",
+      "temperature": 0.1,
+      "description": "Strategic debugging - uses Sonnet 4.5 for analysis"
+    },
+    "frontend-ui-ux-engineer": {
+      "model": "google/antigravity-gemini-3-pro-high",
+      "temperature": 0.7,
+      "description": "UI/UX specialist - uses Gemini Pro for creative design"
+    },
+    "document-writer": {
+      "model": "google/antigravity-gemini-3-flash",
+      "temperature": 0.6,
+      "description": "Documentation - uses Gemini Flash for writing"
+    },
+    "multimodal-looker": {
+      "model": "google/antigravity-gemini-3-flash",
+      "temperature": 0.4,
+      "description": "Visual analysis - uses Gemini Flash for images/PDFs"
+    }
+  }
+}

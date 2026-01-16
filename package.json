@@ -1,0 +1,13 @@
+{
+  "name": "opencode-config",
+  "version": "1.0.0",
+  "dependencies": {
+    "@opencode-ai/plugin": "1.1.23"
+  },
+  "devDependencies": {
+    "patch-package": "^8.0.1"
+  },
+  "scripts": {
+    "postinstall": "./apply-patches.sh"
+  }
+}
