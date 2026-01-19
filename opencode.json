@@ -5,6 +5,14 @@
     "oh-my-opencode"
   ],
   "provider": {
+    "openai": {
+      "name": "OpenAI",
+      "models": {
+        "gpt-5.2-codex": {
+          "name": "GPT-5.2 Codex"
+        }
+      }
+    },
     "google": {
       "name": "Google",
       "models": {
